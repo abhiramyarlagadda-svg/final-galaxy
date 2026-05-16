@@ -264,7 +264,11 @@ export function normalizeJob(raw: RawJob): Job {
 export interface FetchOptions {
   technology?: string;
   country?: string;
-  onProgress?: (loaded: number) => void;
+  // Called with each new batch of normalized jobs as soon as it arrives.
+  // Lets the UI render the first batch immediately instead of waiting
+  // for the entire table to drain.
+  onBatch?: (batch: Job[], totalSoFar: number) => void;
+  signal?: AbortSignal;
 }
 
 // Supabase caps a single REST response at ~1000 rows, so we range-paginate
@@ -273,7 +277,7 @@ const PAGE = 1000;
 const HARD_CAP = 100_000; // safety net so a runaway loop can't hang the browser
 
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
-  const { technology = '', country = '', onProgress } = options;
+  const { technology = '', country = '', onBatch, signal } = options;
 
   const buildQuery = (orderByPostedAt: boolean) => {
     let q = radarSupabase.from('jobs').select('*');
@@ -292,15 +296,17 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
     return q;
   };
 
-  const drain = async (orderByPostedAt: boolean): Promise<RawJob[]> => {
-    const all: RawJob[] = [];
+  const drain = async (orderByPostedAt: boolean): Promise<Job[]> => {
+    const all: Job[] = [];
     let from = 0;
     while (from < HARD_CAP) {
+      if (signal?.aborted) break;
       const { data, error } = await buildQuery(orderByPostedAt).range(from, from + PAGE - 1);
       if (error) throw error;
       const rows = (data as RawJob[]) || [];
-      all.push(...rows);
-      onProgress?.(all.length);
+      const normalized = rows.map(normalizeJob);
+      all.push(...normalized);
+      onBatch?.(normalized, all.length);
       if (rows.length < PAGE) break;
       from += PAGE;
     }
@@ -308,14 +314,11 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
   };
 
   try {
-    const rows = await drain(true);
-    return rows.map(normalizeJob);
+    return await drain(true);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // Fall back if posted_at column is absent
     if (/posted_at/.test(msg)) {
-      const rows = await drain(false);
-      return rows.map(normalizeJob);
+      return await drain(false);
     }
     throw err;
   }

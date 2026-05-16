@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Briefcase,
@@ -48,8 +48,8 @@ export default function App() {
   const [role, setRole] = useState<string>('All');
 
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadedCount, setLoadedCount] = useState(0);
+  const [loading, setLoading] = useState(true);   // true only until FIRST batch arrives
+  const [streaming, setStreaming] = useState(false); // true while more batches come in
   const [aiLoading, setAiLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -59,23 +59,45 @@ export default function App() {
   /* ------------------------------------------------------------------ */
   /*                              Loaders                               */
   /* ------------------------------------------------------------------ */
+  const abortRef = useRef<AbortController | null>(null);
+
   async function load(opts?: { tech?: string; country?: string }) {
+    // Cancel any in-flight stream so its late batches don't bleed into the new query.
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
     setLoading(true);
-    setLoadedCount(0);
+    setStreaming(true);
+    setJobs([]);
+    setPage(1);
+    let firstBatchSeen = false;
     try {
-      const fetched = await fetchJobs({
+      await fetchJobs({
         technology: opts?.tech ?? technology,
         country: opts?.country && opts.country !== 'All' ? opts.country : '',
-        onProgress: (n) => setLoadedCount(n),
+        signal: ctrl.signal,
+        onBatch: (batch) => {
+          if (ctrl.signal.aborted) return;
+          // Append each batch as it arrives so the user can see + paginate
+          // results immediately instead of waiting for the full drain.
+          setJobs((prev) => prev.concat(batch));
+          if (!firstBatchSeen) {
+            firstBatchSeen = true;
+            setLoading(false); // hide skeletons after first 1000 land
+          }
+        },
       });
-      setJobs(fetched);
-      setPage(1);
     } catch (err) {
+      if (ctrl.signal.aborted) return;
       console.error(err);
       const msg = err instanceof Error ? err.message : String(err);
       setToast({ kind: 'error', message: `Could not load jobs: ${msg}` });
     } finally {
-      setLoading(false);
+      if (!ctrl.signal.aborted) {
+        setLoading(false);
+        setStreaming(false);
+      }
     }
   }
 
@@ -229,8 +251,8 @@ export default function App() {
           <div className="stats">
             <span className="stat-pill">
               <span className="dot-pulse" />
-              <strong>{loading ? loadedCount : jobs.length}</strong>{' '}
-              {loading ? 'jobs loading…' : 'jobs loaded'}
+              <strong>{jobs.length.toLocaleString()}</strong>{' '}
+              {streaming ? 'jobs · streaming more…' : 'jobs loaded'}
             </span>
             <span className="stat-pill">
               <Globe2 size={14} />
@@ -317,7 +339,7 @@ export default function App() {
           <div className="submit-cell">
             <button className="submit-btn" type="submit" disabled={loading}>
               <Search size={16} />
-              {loading ? 'Scanning…' : 'Search'}
+              {loading ? 'Scanning…' : streaming ? 'Search (streaming)' : 'Search'}
             </button>
           </div>
         </div>
@@ -338,7 +360,7 @@ export default function App() {
 
         {loading ? (
           <div className="grid">
-            {Array.from({ length: 8 }).map((_, i) => (
+            {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="skeleton-card" />
             ))}
           </div>
