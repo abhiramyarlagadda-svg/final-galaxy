@@ -274,12 +274,10 @@ export interface FetchOptions {
   sincePostedAt?: string | null;
 }
 
-// We don't impose a client-side row limit, but Supabase's PostgREST returns
-// 500 if a single request is too large. So we start with an aggressive window
-// and halve it on error until the server accepts it. The minimum is 1000, the
-// documented default. This way we use the largest window the server allows.
-const INITIAL_WINDOW = 10_000;
-const MIN_WINDOW = 1000;
+// Use the documented, server-accepted page size. We tried 1M and 10k — both
+// 500'd on this Supabase project. 1000 is what the server is configured to
+// allow, so we use it.
+const PAGE = 1000;
 const HARD_CAP = 500_000; // safety net so a runaway loop can't hang the tab
 
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
@@ -308,39 +306,35 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
   const drain = async (orderByPostedAt: boolean): Promise<Job[]> => {
     const all: Job[] = [];
     let from = 0;
-    let pageSize = INITIAL_WINDOW;
-    let lastBatchSize = -1;
 
     while (from < HARD_CAP) {
       if (signal?.aborted) break;
-      const { data, error } = await buildQuery(orderByPostedAt).range(
-        from,
-        from + pageSize - 1,
-      );
 
-      if (error) {
-        // posted_at column missing → caller will retry with a different mode
-        if (/posted_at/.test(error.message)) throw error;
-        // Server rejected our window — halve it and retry, down to the minimum.
-        if (pageSize > MIN_WINDOW) {
-          pageSize = Math.max(MIN_WINDOW, Math.floor(pageSize / 2));
-          console.warn(`[radar] server rejected window; retrying at ${pageSize}`);
-          continue;
-        }
-        throw error;
+      let data: RawJob[] | null = null;
+      let err: { message: string } | null = null;
+      try {
+        const res = await buildQuery(orderByPostedAt).range(from, from + PAGE - 1);
+        data = res.data as RawJob[] | null;
+        err = res.error;
+      } catch (e) {
+        // Some Supabase client errors throw rather than return {error}.
+        // Surface them as a normal error so the outer caller can react.
+        err = { message: e instanceof Error ? e.message : String(e) };
       }
 
-      const rows = (data as RawJob[]) || [];
+      if (err) {
+        if (/posted_at/.test(err.message)) throw new Error(err.message);
+        console.error('[radar] fetch error', err);
+        throw new Error(err.message);
+      }
+
+      const rows = data || [];
       const normalized = rows.map(normalizeJob);
       all.push(...normalized);
       onBatch?.(normalized, all.length);
 
-      if (rows.length === 0) break;
-      // Tail reached when we got fewer rows than what the server typically
-      // gives back for a full window (tracked via lastBatchSize).
-      if (lastBatchSize !== -1 && rows.length < lastBatchSize) break;
-      lastBatchSize = rows.length;
-      from += rows.length;
+      if (rows.length < PAGE) break; // tail reached
+      from += PAGE;
     }
     return all;
   };
