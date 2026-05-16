@@ -274,10 +274,12 @@ export interface FetchOptions {
   sincePostedAt?: string | null;
 }
 
-// Supabase caps a single REST response at ~1000 rows, so we range-paginate
-// until we've drained the table. No hard upper limit — every row is pulled.
-const PAGE = 1000;
-const HARD_CAP = 100_000; // safety net so a runaway loop can't hang the browser
+// No client-side chunk size. We ask Supabase for as many rows as possible per
+// request and let the server respond with whatever its row cap allows. If the
+// server returned fewer rows than asked, we're done; otherwise we advance by
+// whatever it gave us and pull again.
+const HUGE = 1_000_000;
+const HARD_CAP = 500_000; // pure safety net so a runaway loop can't hang the tab
 
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
   const { technology = '', country = '', onBatch, signal, sincePostedAt } = options;
@@ -305,16 +307,21 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
   const drain = async (orderByPostedAt: boolean): Promise<Job[]> => {
     const all: Job[] = [];
     let from = 0;
+    let lastBatchSize = -1;
     while (from < HARD_CAP) {
       if (signal?.aborted) break;
-      const { data, error } = await buildQuery(orderByPostedAt).range(from, from + PAGE - 1);
+      const { data, error } = await buildQuery(orderByPostedAt).range(from, from + HUGE - 1);
       if (error) throw error;
       const rows = (data as RawJob[]) || [];
       const normalized = rows.map(normalizeJob);
       all.push(...normalized);
       onBatch?.(normalized, all.length);
-      if (rows.length < PAGE) break;
-      from += PAGE;
+      // Done when the server returned no rows, or returned fewer rows than the
+      // previous request (i.e. we hit the tail of the table).
+      if (rows.length === 0) break;
+      if (lastBatchSize !== -1 && rows.length < lastBatchSize) break;
+      lastBatchSize = rows.length;
+      from += rows.length;
     }
     return all;
   };
