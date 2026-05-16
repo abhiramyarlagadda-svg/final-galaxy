@@ -4,8 +4,11 @@ import {
   Briefcase,
   Building2,
   Calendar,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Compass,
   Database,
   ExternalLink,
@@ -35,13 +38,21 @@ import {
 
 const PAGE_SIZE = 20;
 
-const EXPERIENCE_OPTIONS: { value: ExperienceLevel | 'All'; label: string }[] = [
-  { value: 'All', label: 'All levels' },
+const EXPERIENCE_OPTIONS: { value: ExperienceLevel; label: string }[] = [
   { value: 'Internship', label: 'Internship' },
   { value: 'Entry', label: 'Entry (0-1 yrs)' },
   { value: 'Mid', label: 'Mid (2-4 yrs)' },
   { value: 'Senior', label: 'Senior (5-8 yrs)' },
   { value: 'Lead', label: 'Lead / Principal (9+)' },
+  { value: 'Unknown', label: 'Unspecified' },
+];
+
+type DateRange = 'all' | 'today' | '3d' | '7d';
+const DATE_OPTIONS: { value: DateRange; label: string; days: number | null }[] = [
+  { value: 'all', label: 'Any time', days: null },
+  { value: 'today', label: 'Today', days: 1 },
+  { value: '3d', label: 'Last 3 days', days: 3 },
+  { value: '7d', label: 'Last 7 days', days: 7 },
 ];
 
 interface Toast {
@@ -52,7 +63,8 @@ interface Toast {
 export default function App() {
   const [technology, setTechnology] = useState('');
   const [country, setCountry] = useState<string>('All');
-  const [experience, setExperience] = useState<ExperienceLevel | 'All'>('All');
+  const [experienceSet, setExperienceSet] = useState<Set<ExperienceLevel>>(new Set());
+  const [dateRange, setDateRange] = useState<DateRange>('all');
   const [role, setRole] = useState<string>('All');
 
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -321,13 +333,20 @@ export default function App() {
   }, [jobs]);
 
   const filtered = useMemo(() => {
+    const days = DATE_OPTIONS.find((d) => d.value === dateRange)?.days ?? null;
+    const cutoff = days !== null ? Date.now() - days * 86_400_000 : null;
     return jobs.filter((j) => {
       if (country !== 'All' && j.country !== country) return false;
-      if (experience !== 'All' && j.experienceLevel !== experience) return false;
+      if (experienceSet.size > 0 && !experienceSet.has(j.experienceLevel)) return false;
       if (role !== 'All' && j.role !== role) return false;
+      if (cutoff !== null) {
+        if (!j.postedAt) return false;
+        const t = new Date(j.postedAt).getTime();
+        if (isNaN(t) || t < cutoff) return false;
+      }
       return true;
     });
-  }, [jobs, country, experience, role]);
+  }, [jobs, country, experienceSet, role, dateRange]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -461,21 +480,31 @@ export default function App() {
             </div>
           </div>
           <div className="field">
-            <label>Experience</label>
+            <label>Posted</label>
             <div className="input-wrap">
-              <Briefcase size={16} />
+              <Clock size={16} />
               <select
                 className="select"
-                value={experience}
-                onChange={(e) => setExperience(e.target.value as ExperienceLevel | 'All')}
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value as DateRange)}
               >
-                {EXPERIENCE_OPTIONS.map((o) => (
+                {DATE_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
                 ))}
               </select>
             </div>
+          </div>
+          <div className="field">
+            <label>Experience</label>
+            <MultiSelect
+              icon={<Briefcase size={16} />}
+              options={EXPERIENCE_OPTIONS}
+              selected={experienceSet}
+              onChange={setExperienceSet}
+              placeholder="All levels"
+            />
           </div>
           <div className="field">
             <label>Role family</label>
@@ -509,7 +538,8 @@ export default function App() {
           <h3>
             <span>{filtered.length}</span> matching role{filtered.length === 1 ? '' : 's'}
             {country !== 'All' && ` · ${country}`}
-            {experience !== 'All' && ` · ${experience}`}
+            {experienceSet.size > 0 && ` · ${Array.from(experienceSet).join(' / ')}`}
+            {dateRange !== 'all' && ` · ${DATE_OPTIONS.find((d) => d.value === dateRange)?.label}`}
           </h3>
           <div className="sort-group">
             Page <strong style={{ color: 'var(--green-700)', margin: '0 4px' }}>{safePage}</strong> of {totalPages}
@@ -523,7 +553,7 @@ export default function App() {
             ))}
           </div>
         ) : pageItems.length === 0 ? (
-          <EmptyState onReset={() => { setTechnology(''); setCountry('All'); setExperience('All'); setRole('All'); load({ tech: '', country: '' }); }} />
+          <EmptyState onReset={() => { setTechnology(''); setCountry('All'); setExperienceSet(new Set()); setDateRange('all'); setRole('All'); load({ tech: '', country: '' }); }} />
         ) : (
           <>
             <motion.div
@@ -961,5 +991,111 @@ function JobDrawerInner({ job, onClose }: { job: Job; onClose: () => void }) {
         </div>
         </motion.aside>
       </motion.div>
+  );
+}
+
+function MultiSelect<T extends string>({
+  icon,
+  options,
+  selected,
+  onChange,
+  placeholder,
+}: {
+  icon: React.ReactNode;
+  options: { value: T; label: string }[];
+  selected: Set<T>;
+  onChange: (next: Set<T>) => void;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const label =
+    selected.size === 0
+      ? placeholder
+      : selected.size === 1
+      ? options.find((o) => o.value === Array.from(selected)[0])?.label || placeholder
+      : `${selected.size} selected`;
+
+  function toggle(v: T) {
+    const next = new Set(selected);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onChange(next);
+  }
+
+  return (
+    <div className="multi-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="multi-trigger"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="multi-trigger-icon">{icon}</span>
+        <span className="multi-trigger-label">{label}</span>
+        <ChevronDown size={14} className="multi-trigger-caret" />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="multi-popover"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.15 }}
+            role="listbox"
+            aria-multiselectable
+          >
+            {selected.size > 0 && (
+              <button
+                type="button"
+                className="multi-clear"
+                onClick={() => onChange(new Set())}
+              >
+                Clear all
+              </button>
+            )}
+            {options.map((opt) => {
+              const checked = selected.has(opt.value);
+              return (
+                <button
+                  type="button"
+                  key={opt.value}
+                  className={`multi-option ${checked ? 'checked' : ''}`}
+                  onClick={() => toggle(opt.value)}
+                  role="option"
+                  aria-selected={checked}
+                >
+                  <span className="multi-check">
+                    {checked && <Check size={12} strokeWidth={3} />}
+                  </span>
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

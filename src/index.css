@@ -266,20 +266,26 @@ a {
   padding: 18px;
   box-shadow: 0 20px 50px -25px rgba(6, 78, 59, 0.18);
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr 1fr auto;
+  grid-template-columns: 1.4fr repeat(4, 1fr) auto;
   gap: 10px;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1180px) {
   .filter-card {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
   }
   .filter-card .submit-cell {
     grid-column: 1 / -1;
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 720px) {
+  .filter-card {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
   .filter-card {
     grid-template-columns: 1fr;
   }
@@ -840,6 +846,144 @@ a {
   padding: 30px 20px 40px;
   font-size: 12.5px;
   color: var(--ink-mute);
+}
+
+/* ---------- Multi-select ---------- */
+.multi-wrap {
+  position: relative;
+}
+
+.multi-trigger {
+  width: 100%;
+  height: 46px;
+  padding: 0 36px 0 42px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  position: relative;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.multi-trigger:hover {
+  border-color: var(--green-300);
+}
+
+.multi-trigger:focus,
+.multi-wrap[data-open='true'] .multi-trigger {
+  border-color: var(--green-500);
+  background: var(--white);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
+  outline: none;
+}
+
+.multi-trigger-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--green-600);
+  display: inline-flex;
+}
+
+.multi-trigger-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-trigger-caret {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--green-600);
+}
+
+.multi-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 20px 40px -12px rgba(6, 78, 59, 0.3);
+  z-index: 40;
+  padding: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  min-width: 200px;
+}
+
+.multi-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.multi-option:hover {
+  background: var(--green-50);
+}
+
+.multi-option.checked {
+  color: var(--green-800);
+  background: var(--green-50);
+}
+
+.multi-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--green-300);
+  background: var(--white);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--white);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.multi-option.checked .multi-check {
+  background: var(--green-600);
+  border-color: var(--green-700);
+}
+
+.multi-clear {
+  width: 100%;
+  padding: 7px 10px;
+  margin-bottom: 4px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green-700);
+  background: transparent;
+  text-align: left;
+  border-bottom: 1px dashed var(--line);
+  border-radius: 0;
+  padding-bottom: 10px;
+}
+
+.multi-clear:hover {
+  color: var(--green-800);
 }
 
 /* ---------- Job detail drawer ---------- */
