@@ -844,23 +844,23 @@ function JobDrawerInner({ job, onClose }: { job: Job; onClose: () => void }) {
     .filter(Boolean);
 
   return (
-    <>
-      <motion.div
-        className="drawer-backdrop"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-      />
-      <motion.aside
-        className="drawer"
-        initial={{ x: '100%' }}
-        animate={{ x: 0 }}
-        exit={{ x: '100%' }}
-        transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-        role="dialog"
-        aria-label={`${job.title} at ${job.company}`}
-      >
+    <motion.div
+      className="drawer-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      onClick={onClose}
+    >
+        <motion.aside
+          className="drawer"
+          initial={{ opacity: 0, scale: 0.94, y: 14 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: 10 }}
+          transition={{ type: 'spring', stiffness: 280, damping: 26 }}
+          role="dialog"
+          aria-label={`${job.title} at ${job.company}`}
+          onClick={(e) => e.stopPropagation()}
+        >
         <div className="drawer-head">
           <div className="drawer-logo" aria-hidden>{initials}</div>
           <div className="drawer-head-text">
@@ -959,7 +959,7 @@ function JobDrawerInner({ job, onClose }: { job: Job; onClose: () => void }) {
             <span className="drawer-apply disabled">No apply link available</span>
           )}
         </div>
-      </motion.aside>
-    </>
+        </motion.aside>
+      </motion.div>
   );
 }
