@@ -65,6 +65,7 @@ export default function App() {
   const [toast, setToast] = useState<Toast | null>(null);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [keyDraft, setKeyDraft] = useState('');
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
 
   /* ------------------------------------------------------------------ */
   /*                              Loaders                               */
@@ -231,6 +232,19 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!selectedJob) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedJob(null);
+    };
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [selectedJob]);
 
   useEffect(() => {
     if (!toast) return;
@@ -523,7 +537,7 @@ export default function App() {
             >
               <AnimatePresence mode="popLayout">
                 {pageItems.map((job) => (
-                  <JobCard key={job.id} job={job} />
+                  <JobCard key={job.id} job={job} onSelect={setSelectedJob} />
                 ))}
               </AnimatePresence>
             </motion.div>
@@ -547,6 +561,9 @@ export default function App() {
         </code>{' '}
         · AI suggestions powered by Anthropic Claude.
       </footer>
+
+      {/* JOB DETAIL DRAWER */}
+      <JobDrawer job={selectedJob} onClose={() => setSelectedJob(null)} />
 
       {/* SETTINGS MODAL */}
       <AnimatePresence>
@@ -615,7 +632,7 @@ export default function App() {
 /*                              SUB-COMPONENTS                            */
 /* ====================================================================== */
 
-function JobCard({ job }: { job: Job }) {
+function JobCard({ job, onSelect }: { job: Job; onSelect: (j: Job) => void }) {
   const posted = job.postedAt
     ? new Date(job.postedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
     : null;
@@ -643,6 +660,15 @@ function JobCard({ job }: { job: Job }) {
         show: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.2, 0.7, 0.2, 1] } },
       }}
       exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+      onClick={() => onSelect(job)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect(job);
+        }
+      }}
     >
       <div className="job-card-head">
         <div className="job-logo" aria-hidden>{initials}</div>
@@ -688,7 +714,13 @@ function JobCard({ job }: { job: Job }) {
           {job.platform || job.source}
         </span>
         {job.applyUrl ? (
-          <a className="apply-link" href={job.applyUrl} target="_blank" rel="noopener noreferrer">
+          <a
+            className="apply-link"
+            href={job.applyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+          >
             Apply <ExternalLink size={11} />
           </a>
         ) : (
@@ -765,5 +797,169 @@ function Pagination({
         Next <ChevronRight size={14} />
       </button>
     </nav>
+  );
+}
+
+function JobDrawer({ job, onClose }: { job: Job | null; onClose: () => void }) {
+  return (
+    <AnimatePresence>
+      {job && <JobDrawerInner job={job} onClose={onClose} />}
+    </AnimatePresence>
+  );
+}
+
+function JobDrawerInner({ job, onClose }: { job: Job; onClose: () => void }) {
+  const posted = job.postedAt
+    ? new Date(job.postedAt).toLocaleString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : null;
+
+  const experienceLabel =
+    job.experienceLevel === 'Unknown'
+      ? 'Not specified'
+      : job.experienceYears
+      ? `${job.experienceLevel} (${job.experienceYears} years)`
+      : job.experienceLevel;
+
+  const initials =
+    job.company
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join('') || '·';
+
+  const paragraphs = (job.description || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&[a-z]+;/gi, ' ')
+    .split(/\n\s*\n|\r\n\r\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return (
+    <>
+      <motion.div
+        className="drawer-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+      />
+      <motion.aside
+        className="drawer"
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+        role="dialog"
+        aria-label={`${job.title} at ${job.company}`}
+      >
+        <div className="drawer-head">
+          <div className="drawer-logo" aria-hidden>{initials}</div>
+          <div className="drawer-head-text">
+            <h2>{job.title}</h2>
+            <span className="company-line">
+              <Building2 size={14} />
+              {job.company}
+            </span>
+          </div>
+          <button className="drawer-close" onClick={onClose} aria-label="Close preview">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="drawer-meta">
+          <span className={`job-source-tag ${job.isAI ? 'ai' : ''}`}>
+            {job.isAI ? <Sparkles size={10} /> : <Radar size={10} />}
+            {job.platform || job.source}
+          </span>
+          <span className="meta-chip">
+            <MapPin size={11} />
+            {job.location && job.location !== '—' ? job.location : job.country}
+          </span>
+          <span className="meta-chip exp">
+            <Briefcase size={11} />
+            {experienceLabel}
+          </span>
+          <span className="meta-chip">
+            <Compass size={11} />
+            {job.role}
+          </span>
+          {posted && (
+            <span className="meta-chip">
+              <Calendar size={11} />
+              Posted {posted}
+            </span>
+          )}
+        </div>
+
+        <div className="drawer-body">
+          <div className="drawer-section">
+            <h4>Quick facts</h4>
+            <div className="drawer-info-grid">
+              <div className="drawer-info">
+                <div className="label"><Building2 size={11} /> Company</div>
+                <div className="value">{job.company}</div>
+              </div>
+              <div className="drawer-info">
+                <div className="label"><Globe2 size={11} /> Country</div>
+                <div className="value">{job.country}</div>
+              </div>
+              <div className="drawer-info">
+                <div className="label"><MapPin size={11} /> Location</div>
+                <div className="value">{job.location && job.location !== '—' ? job.location : '—'}</div>
+              </div>
+              <div className="drawer-info">
+                <div className="label"><Briefcase size={11} /> Experience</div>
+                <div className="value">{experienceLabel}</div>
+              </div>
+              <div className="drawer-info">
+                <div className="label"><Compass size={11} /> Role family</div>
+                <div className="value">{job.role}</div>
+              </div>
+              <div className="drawer-info">
+                <div className="label"><Target size={11} /> Source</div>
+                <div className="value">{job.platform || job.source || '—'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="drawer-section">
+            <h4>Full description</h4>
+            <div className="drawer-desc">
+              {paragraphs.length === 0 ? (
+                <p style={{ color: 'var(--ink-mute)' }}>
+                  No description provided for this listing.
+                </p>
+              ) : (
+                paragraphs.map((p, i) => <p key={i}>{p}</p>)
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="drawer-foot">
+          {job.applyUrl ? (
+            <a
+              className="drawer-apply"
+              href={job.applyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Apply on {job.platform || 'source'} <ExternalLink size={14} />
+            </a>
+          ) : (
+            <span className="drawer-apply disabled">No apply link available</span>
+          )}
+        </div>
+      </motion.aside>
+    </>
   );
 }
