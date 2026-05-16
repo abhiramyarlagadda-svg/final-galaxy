@@ -728,6 +728,14 @@ a {
   100% { background-position: -200% 0; }
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ---------- Modal (Settings / AI key) ---------- */
 .modal-backdrop {
   position: fixed;

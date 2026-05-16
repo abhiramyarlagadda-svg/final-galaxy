@@ -269,6 +269,9 @@ export interface FetchOptions {
   // for the entire table to drain.
   onBatch?: (batch: Job[], totalSoFar: number) => void;
   signal?: AbortSignal;
+  // ISO timestamp — when set, only rows with posted_at > this are returned.
+  // Used after a warm-cache hydrate to pull only newly-posted jobs.
+  sincePostedAt?: string | null;
 }
 
 // Supabase caps a single REST response at ~1000 rows, so we range-paginate
@@ -277,7 +280,7 @@ const PAGE = 1000;
 const HARD_CAP = 100_000; // safety net so a runaway loop can't hang the browser
 
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
-  const { technology = '', country = '', onBatch, signal } = options;
+  const { technology = '', country = '', onBatch, signal, sincePostedAt } = options;
 
   const buildQuery = (orderByPostedAt: boolean) => {
     let q = radarSupabase.from('jobs').select('*');
@@ -289,6 +292,9 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
     }
     if (country.trim() && country !== 'All' && country !== 'Other') {
       q = q.ilike('location', `%${country.trim()}%`);
+    }
+    if (sincePostedAt) {
+      q = q.gt('posted_at', sincePostedAt);
     }
     if (orderByPostedAt) {
       q = q.order('posted_at', { ascending: false, nullsFirst: false });

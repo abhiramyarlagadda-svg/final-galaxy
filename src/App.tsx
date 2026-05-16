@@ -7,11 +7,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Compass,
+  Database,
   ExternalLink,
   Globe2,
   Key,
   MapPin,
   Radar,
+  RefreshCw,
   Search,
   Sparkles,
   Target,
@@ -24,6 +26,12 @@ import {
   hasAnthropicKey,
   setAnthropicKey,
 } from './lib/claudeClient';
+import {
+  clearCache,
+  latestPostedAt,
+  readAllCached,
+  writeCached,
+} from './lib/cache';
 
 const PAGE_SIZE = 20;
 
@@ -50,6 +58,8 @@ export default function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);   // true only until FIRST batch arrives
   const [streaming, setStreaming] = useState(false); // true while more batches come in
+  const [newCount, setNewCount] = useState(0);    // newly-fetched (delta) since cache hydrate
+  const [hydratedFromCache, setHydratedFromCache] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -61,33 +71,62 @@ export default function App() {
   /* ------------------------------------------------------------------ */
   const abortRef = useRef<AbortController | null>(null);
 
-  async function load(opts?: { tech?: string; country?: string }) {
-    // Cancel any in-flight stream so its late batches don't bleed into the new query.
+  /**
+   * Generic stream-fetch helper. When `mode === 'replace'` the prior list is
+   * wiped first (used for keyword search). When `mode === 'merge'` new rows
+   * are merged into the existing list and persisted to IndexedDB (used for
+   * cache-hydrate refreshes).
+   */
+  async function streamFetch(opts: {
+    technology: string;
+    country: string;
+    sincePostedAt?: string | null;
+    mode: 'replace' | 'merge';
+    persist: boolean;
+  }) {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setLoading(true);
     setStreaming(true);
-    setJobs([]);
-    setPage(1);
+    if (opts.mode === 'replace') {
+      setLoading(true);
+      setJobs([]);
+      setPage(1);
+    }
+    setNewCount(0);
     let firstBatchSeen = false;
+    const collected: Job[] = [];
+
     try {
       await fetchJobs({
-        technology: opts?.tech ?? technology,
-        country: opts?.country && opts.country !== 'All' ? opts.country : '',
+        technology: opts.technology,
+        country: opts.country,
+        sincePostedAt: opts.sincePostedAt ?? null,
         signal: ctrl.signal,
         onBatch: (batch) => {
           if (ctrl.signal.aborted) return;
-          // Append each batch as it arrives so the user can see + paginate
-          // results immediately instead of waiting for the full drain.
-          setJobs((prev) => prev.concat(batch));
+          collected.push(...batch);
+          if (opts.mode === 'replace') {
+            setJobs((prev) => prev.concat(batch));
+          } else {
+            // Merge by id; new jobs go to the top (latest first).
+            setJobs((prev) => {
+              const seen = new Set(prev.map((j) => j.id));
+              const fresh = batch.filter((j) => !seen.has(j.id));
+              setNewCount((c) => c + fresh.length);
+              return [...fresh, ...prev];
+            });
+          }
           if (!firstBatchSeen) {
             firstBatchSeen = true;
-            setLoading(false); // hide skeletons after first 1000 land
+            setLoading(false);
           }
         },
       });
+      if (opts.persist && collected.length > 0) {
+        await writeCached(collected);
+      }
     } catch (err) {
       if (ctrl.signal.aborted) return;
       console.error(err);
@@ -101,9 +140,76 @@ export default function App() {
     }
   }
 
+  /** Keyword/country re-search. With no filters we restore the cache + delta. */
+  async function load(opts?: { tech?: string; country?: string }) {
+    const tech = (opts?.tech ?? technology).trim();
+    const ctry = opts?.country && opts.country !== 'All' ? opts.country : '';
+
+    if (!tech && !ctry) {
+      // No filters — fall back to the cached base view and delta-fetch.
+      const cached = await readAllCached();
+      if (cached.length > 0) {
+        setJobs(cached);
+        setLoading(false);
+        setHydratedFromCache(true);
+        setPage(1);
+        await streamFetch({
+          technology: '',
+          country: '',
+          sincePostedAt: latestPostedAt(cached),
+          mode: 'merge',
+          persist: true,
+        });
+        return;
+      }
+    }
+
+    // Filtered query — always hit Supabase, replace the list, don't pollute cache.
+    await streamFetch({
+      technology: tech,
+      country: ctry,
+      mode: 'replace',
+      persist: false,
+    });
+  }
+
+  /** Force a full refetch and replace the cache. */
+  async function refreshAll() {
+    await clearCache();
+    setJobs([]);
+    await streamFetch({ technology: '', country: '', mode: 'replace', persist: true });
+    setToast({ kind: 'success', message: 'Cache refreshed from scratch.' });
+  }
+
+  /** Hydrate from IndexedDB on first mount, then delta-fetch only new postings. */
   useEffect(() => {
-    load();
-    // initial fetch only
+    let cancelled = false;
+    (async () => {
+      const cached = await readAllCached();
+      if (cancelled) return;
+      if (cached.length > 0) {
+        // Show cached jobs immediately — no spinner, no empty state.
+        setJobs(cached);
+        setLoading(false);
+        setHydratedFromCache(true);
+        const since = latestPostedAt(cached);
+        // Pull only jobs newer than the most-recent cached posted_at.
+        await streamFetch({
+          technology: '',
+          country: '',
+          sincePostedAt: since,
+          mode: 'merge',
+          persist: true,
+        });
+      } else {
+        // Cold start — full fetch + cache.
+        await streamFetch({ technology: '', country: '', mode: 'replace', persist: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -215,6 +321,15 @@ export default function App() {
           <div className="hero-actions">
             <button
               className="btn btn-ghost"
+              onClick={refreshAll}
+              disabled={streaming || loading}
+              title="Clear local cache and re-fetch every job"
+            >
+              <RefreshCw size={16} className={streaming ? 'spin' : undefined} />
+              Refresh
+            </button>
+            <button
+              className="btn btn-ghost"
               onClick={() => {
                 setKeyDraft(getAnthropicKey());
                 setShowKeyModal(true);
@@ -252,8 +367,18 @@ export default function App() {
             <span className="stat-pill">
               <span className="dot-pulse" />
               <strong>{jobs.length.toLocaleString()}</strong>{' '}
-              {streaming ? 'jobs · streaming more…' : 'jobs loaded'}
+              {streaming
+                ? hydratedFromCache
+                  ? 'jobs · syncing new postings…'
+                  : 'jobs · streaming…'
+                : 'jobs loaded'}
             </span>
+            {hydratedFromCache && (
+              <span className="stat-pill">
+                <Database size={14} />
+                cached · <strong>{newCount}</strong> new this visit
+              </span>
+            )}
             <span className="stat-pill">
               <Globe2 size={14} />
               <strong>{countries.length - 1}</strong> countries
