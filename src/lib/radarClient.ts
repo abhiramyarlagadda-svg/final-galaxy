@@ -116,19 +116,46 @@ const COUNTRY_HINTS: Record<string, string> = {
   anywhere: 'Remote',
 };
 
+// Strict allow-list — only these values are valid in the country filter.
+// Anything that doesn't match maps to "Other".
+export const KNOWN_COUNTRIES = [
+  'India',
+  'United States',
+  'United Kingdom',
+  'Canada',
+  'Germany',
+  'France',
+  'Spain',
+  'Italy',
+  'Netherlands',
+  'Australia',
+  'Singapore',
+  'Ireland',
+  'Switzerland',
+  'Japan',
+  'United Arab Emirates',
+  'Remote',
+] as const;
+
+const KNOWN_SET = new Set<string>(KNOWN_COUNTRIES);
+
 export function detectCountry(location: string | null | undefined): string {
-  if (!location) return 'Unknown';
+  if (!location) return 'Other';
   const raw = ' ' + location.toLowerCase() + ' ';
 
   // direct longest-match first
   const keys = Object.keys(COUNTRY_HINTS).sort((a, b) => b.length - a.length);
   for (const k of keys) {
-    if (raw.includes(k)) return COUNTRY_HINTS[k];
+    if (raw.includes(k)) {
+      const c = COUNTRY_HINTS[k];
+      return KNOWN_SET.has(c) ? c : 'Other';
+    }
   }
 
-  // fall back to last comma-separated token (e.g. "Berlin, Germany")
+  // If the last comma-token is itself a known country, accept it; otherwise "Other".
   const last = location.split(',').map((x) => x.trim()).filter(Boolean).pop();
-  return last || 'Unknown';
+  if (last && KNOWN_SET.has(last)) return last;
+  return 'Other';
 }
 
 function parseExperienceYears(text: string): number | null {
@@ -237,35 +264,59 @@ export function normalizeJob(raw: RawJob): Job {
 export interface FetchOptions {
   technology?: string;
   country?: string;
-  limit?: number;
+  onProgress?: (loaded: number) => void;
 }
 
+// Supabase caps a single REST response at ~1000 rows, so we range-paginate
+// until we've drained the table. No hard upper limit — every row is pulled.
+const PAGE = 1000;
+const HARD_CAP = 100_000; // safety net so a runaway loop can't hang the browser
+
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
-  const { technology = '', country = '', limit = 500 } = options;
+  const { technology = '', country = '', onProgress } = options;
 
-  let query = radarSupabase.from('jobs').select('*').limit(limit);
-
-  if (technology.trim()) {
-    const t = technology.trim();
-    // try both columns: title or description contains the technology
-    query = query.or(`title.ilike.%${t}%,description.ilike.%${t}%,job_title.ilike.%${t}%,job_description.ilike.%${t}%`);
-  }
-  if (country.trim() && country !== 'All') {
-    query = query.ilike('location', `%${country.trim()}%`);
-  }
-
-  // Order by latest first; fall back gracefully if column missing
-  query = query.order('posted_at', { ascending: false, nullsFirst: false });
-
-  const { data, error } = await query;
-  if (error) {
-    // Retry without posted_at ordering if the column is absent.
-    if (/posted_at/.test(error.message)) {
-      const retry = await radarSupabase.from('jobs').select('*').limit(limit);
-      if (retry.error) throw retry.error;
-      return (retry.data as RawJob[]).map(normalizeJob);
+  const buildQuery = (orderByPostedAt: boolean) => {
+    let q = radarSupabase.from('jobs').select('*');
+    if (technology.trim()) {
+      const t = technology.trim();
+      q = q.or(
+        `title.ilike.%${t}%,description.ilike.%${t}%,job_title.ilike.%${t}%,job_description.ilike.%${t}%`,
+      );
     }
-    throw error;
+    if (country.trim() && country !== 'All' && country !== 'Other') {
+      q = q.ilike('location', `%${country.trim()}%`);
+    }
+    if (orderByPostedAt) {
+      q = q.order('posted_at', { ascending: false, nullsFirst: false });
+    }
+    return q;
+  };
+
+  const drain = async (orderByPostedAt: boolean): Promise<RawJob[]> => {
+    const all: RawJob[] = [];
+    let from = 0;
+    while (from < HARD_CAP) {
+      const { data, error } = await buildQuery(orderByPostedAt).range(from, from + PAGE - 1);
+      if (error) throw error;
+      const rows = (data as RawJob[]) || [];
+      all.push(...rows);
+      onProgress?.(all.length);
+      if (rows.length < PAGE) break;
+      from += PAGE;
+    }
+    return all;
+  };
+
+  try {
+    const rows = await drain(true);
+    return rows.map(normalizeJob);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Fall back if posted_at column is absent
+    if (/posted_at/.test(msg)) {
+      const rows = await drain(false);
+      return rows.map(normalizeJob);
+    }
+    throw err;
   }
-  return (data as RawJob[]).map(normalizeJob);
 }

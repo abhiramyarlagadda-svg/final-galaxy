@@ -17,7 +17,7 @@ import {
   Target,
   X,
 } from 'lucide-react';
-import { fetchJobs, type ExperienceLevel, type Job } from './lib/radarClient';
+import { fetchJobs, KNOWN_COUNTRIES, type ExperienceLevel, type Job } from './lib/radarClient';
 import {
   fetchAIJobs,
   getAnthropicKey,
@@ -49,6 +49,7 @@ export default function App() {
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadedCount, setLoadedCount] = useState(0);
   const [aiLoading, setAiLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -60,10 +61,12 @@ export default function App() {
   /* ------------------------------------------------------------------ */
   async function load(opts?: { tech?: string; country?: string }) {
     setLoading(true);
+    setLoadedCount(0);
     try {
       const fetched = await fetchJobs({
         technology: opts?.tech ?? technology,
         country: opts?.country && opts.country !== 'All' ? opts.country : '',
+        onProgress: (n) => setLoadedCount(n),
       });
       setJobs(fetched);
       setPage(1);
@@ -141,9 +144,13 @@ export default function App() {
   /*                         Derived UI state                           */
   /* ------------------------------------------------------------------ */
   const countries = useMemo(() => {
-    const set = new Set<string>();
-    jobs.forEach((j) => j.country && set.add(j.country));
-    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+    const present = new Set<string>();
+    jobs.forEach((j) => present.add(j.country));
+    // Only real countries (from the allow-list) — never cities.
+    const real = KNOWN_COUNTRIES.filter((c) => present.has(c));
+    const list = ['All', ...real];
+    if (present.has('Other')) list.push('Other');
+    return list;
   }, [jobs]);
 
   const roles = useMemo(() => {
@@ -222,7 +229,8 @@ export default function App() {
           <div className="stats">
             <span className="stat-pill">
               <span className="dot-pulse" />
-              <strong>{jobs.length}</strong> jobs loaded
+              <strong>{loading ? loadedCount : jobs.length}</strong>{' '}
+              {loading ? 'jobs loading…' : 'jobs loaded'}
             </span>
             <span className="stat-pill">
               <Globe2 size={14} />
@@ -453,53 +461,65 @@ function JobCard({ job }: { job: Job }) {
       ? `${job.experienceLevel} · ${job.experienceYears}y`
       : job.experienceLevel;
 
+  const initials = job.company
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join('') || '·';
+
   return (
     <motion.article
       layout
       className="job-card"
       variants={{
-        hidden: { opacity: 0, y: 16 },
-        show: { opacity: 1, y: 0, transition: { duration: 0.32, ease: [0.2, 0.7, 0.2, 1] } },
+        hidden: { opacity: 0, y: 14 },
+        show: { opacity: 1, y: 0, transition: { duration: 0.28, ease: [0.2, 0.7, 0.2, 1] } },
       }}
-      exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.15 } }}
+      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
     >
       <div className="job-card-head">
-        <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="job-logo" aria-hidden>{initials}</div>
+        <div className="job-card-head-text">
           <h4 className="job-title" title={job.title}>{job.title}</h4>
           <p className="job-company">
-            <Building2 size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: -1 }} />
+            <Building2 size={12} />
             {job.company}
           </p>
+          <div className="job-meta">
+            <span className="meta-chip">
+              <MapPin size={11} />
+              {job.country}
+              {job.location && job.location !== job.country && job.location !== '—' && (
+                ` · ${job.location.split(',')[0]}`
+              )}
+            </span>
+            <span className="meta-chip exp">
+              <Briefcase size={11} />
+              {experienceLabel}
+            </span>
+            <span className="meta-chip">
+              <Compass size={11} />
+              {job.role}
+            </span>
+          </div>
         </div>
-        <span className={`job-source-tag ${job.isAI ? 'ai' : ''}`}>
-          {job.isAI ? <Sparkles size={10} /> : <Radar size={10} />}
-          {job.platform || job.source}
-        </span>
       </div>
 
-      <div className="job-meta">
-        <span className="meta-chip">
-          <MapPin size={11} />
-          {job.country}{job.location && job.location !== job.country && job.location !== '—' && ` · ${job.location.split(',')[0]}`}
-        </span>
-        <span className="meta-chip exp">
-          <Briefcase size={11} />
-          {experienceLabel}
-        </span>
-        <span className="meta-chip">
-          <Compass size={11} />
-          {job.role}
-        </span>
-      </div>
-
-      {job.description && (
-        <p className="job-desc">{cleanDescription(job.description)}</p>
-      )}
-
-      <div className="job-foot">
+      <div className="job-middle">
+        {job.description && (
+          <p className="job-desc">{cleanDescription(job.description)}</p>
+        )}
         <span className="job-date">
           <Calendar size={11} />
           {posted ?? 'Date n/a'}
+        </span>
+      </div>
+
+      <div className="job-right">
+        <span className={`job-source-tag ${job.isAI ? 'ai' : ''}`}>
+          {job.isAI ? <Sparkles size={10} /> : <Radar size={10} />}
+          {job.platform || job.source}
         </span>
         {job.applyUrl ? (
           <a className="apply-link" href={job.applyUrl} target="_blank" rel="noopener noreferrer">
