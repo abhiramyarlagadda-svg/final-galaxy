@@ -272,6 +272,20 @@ export interface FetchOptions {
   // ISO timestamp — when set, only rows with posted_at > this are returned.
   // Used after a warm-cache hydrate to pull only newly-posted jobs.
   sincePostedAt?: string | null;
+  // After the first batch has been delivered, wait this many ms between
+  // subsequent batches. Keeps the UI responsive while the rest streams in.
+  interBatchDelayMs?: number;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(t);
+      resolve();
+    }, { once: true });
+  });
 }
 
 // Use the documented, server-accepted page size. We tried 1M and 10k — both
@@ -281,7 +295,14 @@ const PAGE = 1000;
 const HARD_CAP = 500_000; // safety net so a runaway loop can't hang the tab
 
 export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
-  const { technology = '', country = '', onBatch, signal, sincePostedAt } = options;
+  const {
+    technology = '',
+    country = '',
+    onBatch,
+    signal,
+    sincePostedAt,
+    interBatchDelayMs = 0,
+  } = options;
 
   const buildQuery = (orderByPostedAt: boolean) => {
     let q = radarSupabase.from('jobs').select('*');
@@ -306,9 +327,18 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
   const drain = async (orderByPostedAt: boolean): Promise<Job[]> => {
     const all: Job[] = [];
     let from = 0;
+    let firstBatchDelivered = false;
 
     while (from < HARD_CAP) {
       if (signal?.aborted) break;
+
+      // After the first batch has hit the UI, give the browser breathing
+      // room before pulling the next page. This keeps interactions snappy
+      // and avoids hammering Supabase with back-to-back requests.
+      if (firstBatchDelivered && interBatchDelayMs > 0) {
+        await sleep(interBatchDelayMs, signal);
+        if (signal?.aborted) break;
+      }
 
       let data: RawJob[] | null = null;
       let err: { message: string } | null = null;
@@ -317,8 +347,6 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
         data = res.data as RawJob[] | null;
         err = res.error;
       } catch (e) {
-        // Some Supabase client errors throw rather than return {error}.
-        // Surface them as a normal error so the outer caller can react.
         err = { message: e instanceof Error ? e.message : String(e) };
       }
 
@@ -332,6 +360,7 @@ export async function fetchJobs(options: FetchOptions = {}): Promise<Job[]> {
       const normalized = rows.map(normalizeJob);
       all.push(...normalized);
       onBatch?.(normalized, all.length);
+      firstBatchDelivered = true;
 
       if (rows.length < PAGE) break; // tail reached
       from += PAGE;

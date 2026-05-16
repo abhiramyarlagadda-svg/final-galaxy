@@ -83,6 +83,9 @@ export default function App() {
     sincePostedAt?: string | null;
     mode: 'replace' | 'merge';
     persist: boolean;
+    // Pace subsequent batches so the first render isn't drowned by a flood
+    // of follow-up fetches. 0 = no throttling.
+    throttleMs?: number;
   }) {
     abortRef.current?.abort();
     const ctrl = new AbortController();
@@ -104,6 +107,7 @@ export default function App() {
         country: opts.country,
         sincePostedAt: opts.sincePostedAt ?? null,
         signal: ctrl.signal,
+        interBatchDelayMs: opts.throttleMs ?? 0,
         onBatch: (batch) => {
           if (ctrl.signal.aborted) return;
           collected.push(...batch);
@@ -177,7 +181,13 @@ export default function App() {
   async function refreshAll() {
     await clearCache();
     setJobs([]);
-    await streamFetch({ technology: '', country: '', mode: 'replace', persist: true });
+    await streamFetch({
+      technology: '',
+      country: '',
+      mode: 'replace',
+      persist: true,
+      throttleMs: 800, // background-fetch after first batch renders
+    });
     setToast({ kind: 'success', message: 'Cache refreshed from scratch.' });
   }
 
@@ -194,6 +204,7 @@ export default function App() {
         setHydratedFromCache(true);
         const since = latestPostedAt(cached);
         // Pull only jobs newer than the most-recent cached posted_at.
+        // Delta is small — no throttling needed.
         await streamFetch({
           technology: '',
           country: '',
@@ -202,8 +213,16 @@ export default function App() {
           persist: true,
         });
       } else {
-        // Cold start — full fetch + cache.
-        await streamFetch({ technology: '', country: '', mode: 'replace', persist: true });
+        // Cold start — fetch the first 1000 fast (renders immediately), then
+        // pace subsequent batches so the UI stays interactive while the rest
+        // streams in the background.
+        await streamFetch({
+          technology: '',
+          country: '',
+          mode: 'replace',
+          persist: true,
+          throttleMs: 800,
+        });
       }
     })();
     return () => {
@@ -370,7 +389,7 @@ export default function App() {
               {streaming
                 ? hydratedFromCache
                   ? 'jobs · syncing new postings…'
-                  : 'jobs · streaming…'
+                  : 'jobs · loading more in background…'
                 : 'jobs loaded'}
             </span>
             {hydratedFromCache && (
