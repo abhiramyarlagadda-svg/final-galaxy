@@ -47,13 +47,33 @@ const EXPERIENCE_OPTIONS: { value: ExperienceLevel; label: string }[] = [
   { value: 'Unknown', label: 'Unspecified' },
 ];
 
-type DateRange = 'all' | '24h' | '3d' | '7d';
-const DATE_OPTIONS: { value: DateRange; label: string; days: number | null }[] = [
-  { value: 'all', label: 'Any time', days: null },
-  { value: '24h', label: 'Last 24 hours', days: 1 },
-  { value: '3d', label: 'Last 3 days', days: 3 },
-  { value: '7d', label: 'Last 7 days', days: 7 },
+type DateRange = 'all' | 'today' | '24h' | '3d' | '7d';
+const DATE_OPTIONS: { value: DateRange; label: string }[] = [
+  { value: 'all', label: 'Any time' },
+  { value: 'today', label: 'Today' },
+  { value: '24h', label: 'Last 24 hours' },
+  { value: '3d', label: 'Last 3 days' },
+  { value: '7d', label: 'Last 7 days' },
 ];
+
+/** Returns the millisecond cutoff for a date range, or null for "any time". */
+function cutoffFor(range: DateRange): number | null {
+  switch (range) {
+    case 'all':
+      return null;
+    case 'today': {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    }
+    case '24h':
+      return Date.now() - 86_400_000;
+    case '3d':
+      return Date.now() - 3 * 86_400_000;
+    case '7d':
+      return Date.now() - 7 * 86_400_000;
+  }
+}
 
 interface Toast {
   message: string;
@@ -333,8 +353,7 @@ export default function App() {
   }, [jobs]);
 
   const filtered = useMemo(() => {
-    const days = DATE_OPTIONS.find((d) => d.value === dateRange)?.days ?? null;
-    const cutoff = days !== null ? Date.now() - days * 86_400_000 : null;
+    const cutoff = cutoffFor(dateRange);
     const out = jobs.filter((j) => {
       if (country !== 'All' && j.country !== country) return false;
       if (experienceSet.size > 0 && !experienceSet.has(j.experienceLevel)) return false;
