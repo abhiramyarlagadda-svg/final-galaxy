@@ -47,10 +47,10 @@ const EXPERIENCE_OPTIONS: { value: ExperienceLevel; label: string }[] = [
   { value: 'Unknown', label: 'Unspecified' },
 ];
 
-type DateRange = 'all' | 'today' | '3d' | '7d';
+type DateRange = 'all' | '24h' | '3d' | '7d';
 const DATE_OPTIONS: { value: DateRange; label: string; days: number | null }[] = [
   { value: 'all', label: 'Any time', days: null },
-  { value: 'today', label: 'Today', days: 1 },
+  { value: '24h', label: 'Last 24 hours', days: 1 },
   { value: '3d', label: 'Last 3 days', days: 3 },
   { value: '7d', label: 'Last 7 days', days: 7 },
 ];
@@ -335,7 +335,7 @@ export default function App() {
   const filtered = useMemo(() => {
     const days = DATE_OPTIONS.find((d) => d.value === dateRange)?.days ?? null;
     const cutoff = days !== null ? Date.now() - days * 86_400_000 : null;
-    return jobs.filter((j) => {
+    const out = jobs.filter((j) => {
       if (country !== 'All' && j.country !== country) return false;
       if (experienceSet.size > 0 && !experienceSet.has(j.experienceLevel)) return false;
       if (role !== 'All' && j.role !== role) return false;
@@ -346,6 +346,14 @@ export default function App() {
       }
       return true;
     });
+    // Sort newest first. Jobs without a posted_at drop to the bottom so the
+    // top of the list always reflects the freshest postings.
+    out.sort((a, b) => {
+      const ta = a.postedAt ? new Date(a.postedAt).getTime() : -Infinity;
+      const tb = b.postedAt ? new Date(b.postedAt).getTime() : -Infinity;
+      return tb - ta;
+    });
+    return out;
   }, [jobs, country, experienceSet, role, dateRange]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
